@@ -22,6 +22,14 @@ Mechanics that matter:
   bought; the take-profit is the exit that is expected to fire.
 - After any exit the bot rests 10 bars before it may buy again, so a
   stop-out is never chased straight back into the same falling tape.
+- It opens no new position in the final hour of the window. A winning
+  trade on this tape needs a few hundred bars to reach its take-profit
+  (the dev window's two winners took 203 and 281 bars), and anything
+  still held when the window ends is sold at the last close whether it
+  has recovered or not -- so a dip bought in the last hour is a forced
+  sale waiting to happen, not a trade. The window is 1,440 one-minute
+  bars by the competition's own rules, so the final hour is the last 60
+  scored batches; exits already open are still managed to the end.
 - The bot keeps its own history of closes from the batches it is sent,
   including any warm-up bars, and never trades while warming up. It uses
   only integer arithmetic on the price integers the harness sends, seeds
@@ -31,8 +39,12 @@ Mechanics that matter:
 Calibrated on the kit's frozen 24h dev window (BTC fell 2.8% across it):
 dip 70 bps / take-profit 80 bps / stop 150 bps / 120-bar mean was the
 strongest of the dip family that also held up on held-out 12-hour
-sub-windows (median about +$5.90 there, profitable on 5 of 7). The dev
-number itself is one trial and is not the server result.
+sub-windows (median about +$5.90 there, profitable on 5 of 7). The
+final-hour no-buy rule came from the first local grade: the third trade
+was bought 9 bars before the window ended and was flattened for a loss,
+so the rule keeps the bot out of entries that cannot reach their
+take-profit before the forced sale. The dev number itself is one trial
+and is not the server result.
 """
 
 import os
@@ -51,6 +63,8 @@ TAKE_PROFIT_BPS = 80   # sell when close is this far above the cost basis
 STOP_BPS = 150         # sell when close is this far below the cost basis
 COOLDOWN_BARS = 10     # bars to rest after an exit before buying again
 MAX_SLIPPAGE_BPS = 200  # fills move at most ~64 bps a minute; 200 is slack
+WINDOW_BARS = 1440      # one-minute bars in the 24 h window, per the rules
+NO_BUY_AFTER = WINDOW_BARS - 60  # no new entries in the final hour
 
 # Close history, oldest first. Appended once per batch, in batch order.
 _closes = []
@@ -112,8 +126,12 @@ def on_batch(state, batch):
                 }]
         return []
 
-    # Flat: buy the dip at full size, the moment it prints.
+    # Flat: buy the dip at full size, the moment it prints -- except in
+    # the final hour, where a new position cannot reach its take-profit
+    # before the forced sale at the last close.
     if len(_closes) < MEAN_BARS:
+        return []
+    if state.seq - state.warmup_bars >= NO_BUY_AFTER:
         return []
     if state.seq - _last_sell_seq < COOLDOWN_BARS:
         return []
